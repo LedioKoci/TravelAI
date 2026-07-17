@@ -57,11 +57,8 @@ async function resolveIataCode(cityName) {
 // The Amadeus API usually returns the cheapest flights first, so we ensure prices are numbers.
 
 async function searchFlights(originCityCode, destinationCityCode, departureDate, travelers) {
-    //const originCode = await resolveIataCode(originCity);
-    //const destinationCode = await resolveIataCode(destinationCity);
-    
     // Skip if codes are missing or dates are flexible, which leads to mock price on frontend
-    if (!originCode || !destinationCode || departureDate === 'flexible') {
+    if (!originCityCode || !destinationCityCode || departureDate === 'flexible') {
         console.log('Skipping flight search due to missing IATA codes or flexible dates.');
         return { status: 'skipped', message: 'Missing IATA codes or fixed date is required.', data: [] };
     }
@@ -198,7 +195,7 @@ async function getWeatherForecast(destination, startDate, endDate) {
         : 3; 
 
     try {
-        const url = `http://api.weatherapi.com/v1/forecast.json?key=${API_KEY}&q=${destination}&days=${days}&aqi=no`;
+        const url = `https://api.weatherapi.com/v1/forecast.json?key=${API_KEY}&q=${encodeURIComponent(destination)}&days=${days}&aqi=no`;
         const response = await axios.get(url);
         
         const forecast = response.data.forecast.forecastday.map(day => ({
@@ -230,7 +227,7 @@ async function getDestinationNews(destination) {
 
     try {
         // Search using the destination as a query
-        const url = `https://newsapi.org/v2/everything?q=${destination}&sortBy=publishedAt&language=en&pageSize=3&apiKey=${API_KEY}`;
+        const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(destination)}&sortBy=publishedAt&language=en&pageSize=3&apiKey=${API_KEY}`;
         const response = await axios.get(url);
         
         const articles = response.data.articles.map(article => ({
@@ -408,9 +405,11 @@ Important: Be intelligent about inferring missing information. Calculate approxi
     }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 TravelAI Backend running on port ${PORT}`);
-});
+// Start server (local dev only — Vercel invokes the exported app as a serverless function)
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`🚀 TravelAI Backend running on port ${PORT}`);
+    });
+}
 
 module.exports = app;
