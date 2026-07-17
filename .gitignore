@@ -50,4 +50,4 @@ app.*.map.json
 
 
 # node modules
-.backend/node_modules/
+**/node_modules/
