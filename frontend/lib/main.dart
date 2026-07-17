@@ -136,7 +136,7 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
                   children: [
                     // Logo/Title
                     Container(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         shape: BoxShape.circle,
@@ -148,10 +148,13 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
                           ),
                         ],
                       ),
-                      child: Icon(
-                        Icons.flight_takeoff,
-                        size: 60,
-                        color: Colors.blue.shade600,
+                      child: ClipOval(
+                        child: Image.asset(
+                          'assets/images/app_icon.png',
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.cover,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 30),
