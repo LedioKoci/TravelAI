@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'results_screen.dart'; 
+import 'results_screen.dart';
+
+// Set via --dart-define=API_BASE_URL=https://your-backend.vercel.app when building.
+const String kApiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://backend-puce-chi-41.vercel.app',
+);
 
 void main() {
   runApp(const TravelAIApp());
@@ -77,9 +83,8 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
     setState(() => _isLoading = true);
 
     try {
-      // NOTE: Ensure your local server is running on http://localhost:3000
       final response = await http.post(
-        Uri.parse('http://localhost:3000/api/generate-plan'),
+        Uri.parse('$kApiBaseUrl/api/generate-plan'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'query': _controller.text}),
       ).timeout(const Duration(seconds: 30)); // Added a timeout for robustness

@@ -3,7 +3,8 @@ const cors = require('cors');
 const axios = require('axios'); // For external API calls (Weather, News, RapidAPI)
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Amadeus = require('amadeus');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -340,7 +341,13 @@ Important: Be intelligent about inferring missing information. Calculate approxi
                         "budget": { "type": "STRING" },
                         "interests": { "type": "ARRAY", "items": { "type": "STRING" } },
                         "flightRequired": { "type": "BOOLEAN" }
-                    }
+                    },
+                    required: [
+                        "destinationCity", "originLocationCode", "destinationLocationCode",
+                        "destinationCountry", "departureCity", "passportCountry",
+                        "startDate", "endDate", "duration", "travelers",
+                        "budget", "interests", "flightRequired"
+                    ]
                 }
             }
         });
