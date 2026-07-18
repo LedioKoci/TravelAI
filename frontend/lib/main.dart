@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'results_screen.dart';
+import 'widgets/travel_sidebar.dart';
 
 // Set via --dart-define=API_BASE_URL=https://your-backend.vercel.app when building.
 const String kApiBaseUrl = String.fromEnvironment(
@@ -129,6 +130,13 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      drawer: const TravelSidebar(),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: IconThemeData(color: Colors.blue.shade700),
+      ),
+      extendBodyBehindAppBar: true,
       body: SafeArea(
         child: FadeTransition(
           opacity: _fadeAnimation,

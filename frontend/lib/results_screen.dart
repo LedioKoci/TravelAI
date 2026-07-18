@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 
+import 'services/travel_storage_service.dart';
+import 'widgets/travel_sidebar.dart';
+
 class ResultsScreen extends StatefulWidget {
   final Map<String, dynamic> travelPlan;
 
-  const ResultsScreen({Key? key, required this.travelPlan}) : super(key: key);
+  /// Set when this screen was opened from the saved-travels sidebar, so we
+  /// know it's already persisted and can be un-saved instead of re-saved.
+  final String? savedId;
+
+  const ResultsScreen({Key? key, required this.travelPlan, this.savedId})
+      : super(key: key);
 
   @override
   State<ResultsScreen> createState() => _ResultsScreenState();
@@ -13,6 +21,10 @@ class _ResultsScreenState extends State<ResultsScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
+
+  late bool _isSaved;
+  late String? _savedId;
+  bool _isSaving = false;
 
   // --- SAFE DATA ACCESSORS (Helper Getters for nested backend data) ---
 
@@ -41,6 +53,8 @@ class _ResultsScreenState extends State<ResultsScreen>
   @override
   void initState() {
     super.initState();
+    _savedId = widget.savedId;
+    _isSaved = widget.savedId != null;
     _controller = AnimationController(
       duration: const Duration(milliseconds: 600),
       vsync: this,
@@ -55,10 +69,44 @@ class _ResultsScreenState extends State<ResultsScreen>
     super.dispose();
   }
 
+  Future<void> _toggleSave() async {
+    if (_isSaving) return;
+    setState(() => _isSaving = true);
+
+    try {
+      if (_isSaved && _savedId != null) {
+        await TravelStorageService.delete(_savedId!);
+        setState(() {
+          _isSaved = false;
+          _savedId = null;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Removed from saved travels')),
+          );
+        }
+      } else {
+        final saved = await TravelStorageService.save(widget.travelPlan);
+        setState(() {
+          _isSaved = true;
+          _savedId = saved.id;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Travel saved!')),
+          );
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF0F8FF),
+      endDrawer: const TravelSidebar(),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -73,6 +121,43 @@ class _ResultsScreenState extends State<ResultsScreen>
             fontWeight: FontWeight.bold,
           ),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: TextButton.icon(
+              onPressed: _isSaving ? null : _toggleSave,
+              icon: _isSaving
+                  ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.blue.shade600),
+                      ),
+                    )
+                  : Icon(
+                      _isSaved ? Icons.bookmark : Icons.bookmark_border,
+                      color: Colors.blue.shade700,
+                      size: 20,
+                    ),
+              label: Text(
+                _isSaved ? 'Saved' : 'Save Travel',
+                style: TextStyle(
+                  color: Colors.blue.shade700,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          Builder(
+            builder: (context) => IconButton(
+              icon: Icon(Icons.menu, color: Colors.blue.shade700),
+              tooltip: 'Saved travels',
+              onPressed: () => Scaffold.of(context).openEndDrawer(),
+            ),
+          ),
+        ],
       ),
       body: FadeTransition(
         opacity: _animation,
