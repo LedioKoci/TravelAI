@@ -252,40 +252,106 @@ async function searchHotels(destinationCity, checkInDate, checkOutDate, traveler
 }
 
 // 4. WeatherAPI.com Integration
+function toDateOnly(d) {
+    const copy = new Date(d);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+}
+
+function formatDate(d) {
+    return d.toISOString().split('T')[0];
+}
+
 async function getWeatherForecast(destination, startDate, endDate) {
     const API_KEY = process.env.WEATHER_API_KEY;
     if (!API_KEY) {
         return { status: 'error', message: 'WEATHER_API_KEY not configured.', forecast: [] };
     }
 
-    // WeatherAPI.com usually supports up to 14 days forecast. 
-    // We'll use the 'forecast' endpoint, defaulting to a 3-day forecast if dates are flexible.
-    const days = (startDate !== 'flexible' && endDate !== 'flexible') 
-        ? Math.min(14, Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)))
-        : 3; 
+    if (startDate === 'flexible' || endDate === 'flexible') {
+        // No fixed dates yet, fall back to a short current-conditions preview.
+        try {
+            const url = `https://api.weatherapi.com/v1/forecast.json?key=${API_KEY}&q=${encodeURIComponent(destination)}&days=3&aqi=no`;
+            const response = await axios.get(url);
+            const forecast = response.data.forecast.forecastday.map(mapForecastDay);
+            return {
+                status: 'success',
+                location: response.data.location.name,
+                message: 'Travel dates are flexible; showing near-term weather instead.',
+                forecast
+            };
+        } catch (error) {
+            console.error('Weather API Error:', error.response ? error.response.data : error.message);
+            return { status: 'error', message: 'Failed to fetch weather data.', forecast: [] };
+        }
+    }
+
+    const today = toDateOnly(new Date());
+    const start = toDateOnly(new Date(startDate));
+    const end = toDateOnly(new Date(endDate));
+
+    const daysUntilStart = Math.round((start - today) / (1000 * 60 * 60 * 24));
+    const daysUntilEnd = Math.round((end - today) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilEnd < 0) {
+        return { status: 'error', message: 'Travel dates are in the past.', forecast: [] };
+    }
 
     try {
-        const url = `https://api.weatherapi.com/v1/forecast.json?key=${API_KEY}&q=${encodeURIComponent(destination)}&days=${days}&aqi=no`;
-        const response = await axios.get(url);
-        
-        const forecast = response.data.forecast.forecastday.map(day => ({
-            date: day.date,
-            condition: day.day.condition.text,
-            icon: day.day.condition.icon,
-            maxTempC: day.day.maxtemp_c,
-            minTempC: day.day.mintemp_c,
-        }));
+        // WeatherAPI's standard forecast only covers ~14 days from today (index 0-13).
+        if (daysUntilStart <= 13) {
+            const days = Math.min(14, daysUntilEnd + 1);
+            const url = `https://api.weatherapi.com/v1/forecast.json?key=${API_KEY}&q=${encodeURIComponent(destination)}&days=${days}&aqi=no`;
+            const response = await axios.get(url);
 
-        return { 
-            status: 'success', 
-            location: response.data.location.name, 
-            forecast: forecast 
+            const startStr = formatDate(start);
+            const endStr = formatDate(end);
+            const forecast = response.data.forecast.forecastday
+                .filter(day => day.date >= startStr && day.date <= endStr)
+                .map(mapForecastDay);
+
+            return {
+                status: 'success',
+                location: response.data.location.name,
+                forecast
+            };
+        }
+
+        // Trip is further out than the standard forecast window: use the long-range
+        // "future" endpoint (historical-based estimate) for each date in the trip.
+        const dateList = [];
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            dateList.push(formatDate(d));
+        }
+
+        const responses = await Promise.all(dateList.map(dt =>
+            axios.get(`https://api.weatherapi.com/v1/future.json?key=${API_KEY}&q=${encodeURIComponent(destination)}&dt=${dt}`)
+        ));
+
+        const forecast = responses.map(r => mapForecastDay(r.data.forecast.forecastday[0]));
+        const location = responses[0]?.data?.location?.name;
+
+        return {
+            status: 'success',
+            location,
+            message: 'These dates are beyond the standard forecast range, so this is a historical-average estimate.',
+            forecast
         };
 
     } catch (error) {
         console.error('Weather API Error:', error.response ? error.response.data : error.message);
         return { status: 'error', message: 'Failed to fetch weather data.', forecast: [] };
     }
+}
+
+function mapForecastDay(day) {
+    return {
+        date: day.date,
+        condition: day.day.condition.text,
+        icon: day.day.condition.icon,
+        maxTempC: day.day.maxtemp_c,
+        minTempC: day.day.mintemp_c,
+    };
 }
 
 // 5. NewsAPI Integration
