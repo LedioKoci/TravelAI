@@ -170,9 +170,9 @@ class _ResultsScreenState extends State<ResultsScreen>
   final Map<String, dynamic>? firstFlight = flights.isNotEmpty ? flights.first : null;
   
   // FIX: Properly handle price as number
-  final String flightPrice = firstFlight != null 
-    ? '\$${(firstFlight['price'] as num).toStringAsFixed(0)} ${firstFlight['currency']}' 
-    : '\$${_estimateFlightPrice()} (Est.)';
+  final String flightPrice = firstFlight != null
+    ? '${(firstFlight['price'] as num).toStringAsFixed(0)} ${firstFlight['currency']}'
+    : '${_estimateFlightPrice()} (Est.)';
 
   final String statusMessage = firstFlight != null
     ? 'Actual price found'
@@ -288,7 +288,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        _formatDate(_startDate),
+                        _formatDate(_endDate),
                         style: TextStyle(
                           color: Colors.grey.shade700,
                           fontSize: 14,
@@ -344,12 +344,12 @@ Widget _buildHotelCard() {
   final Map<String, dynamic>? firstHotel = hotels.isNotEmpty ? hotels.first : null;
   
   // FIX: Properly handle REAL price as number
-  final String hotelPrice = firstHotel != null 
-    ? '\$${(firstHotel['pricePerNight'] as num).toStringAsFixed(0)}' 
-    : '\$${_estimateHotelPrice()} (Est.)';
-  
+  final String hotelPrice = firstHotel != null
+    ? '${(firstHotel['pricePerNight'] as num).toStringAsFixed(0)}'
+    : '${_estimateHotelPrice()} (Est.)';
+
   final String totalPrice = firstHotel != null
-    ? '\$${(firstHotel['totalPrice'] as num).toStringAsFixed(0)}'
+    ? '${(firstHotel['totalPrice'] as num).toStringAsFixed(0)}'
     : 'N/A';
 
   final String statusMessage = firstHotel != null
