@@ -2,14 +2,14 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios'); // For external API calls (Weather, News, RapidAPI)
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const Amadeus = require('amadeus');
+const { Duffel } = require('@duffel/api');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY not set. Backend will fail.");
 }
@@ -17,47 +17,46 @@ if (!GEMINI_API_KEY) {
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
 
-const amadeus = new Amadeus({
-    clientId: process.env.AMADEUS_CLIENT_ID,
-    clientSecret: process.env.AMADEUS_CLIENT_SECRET
+const duffel = new Duffel({
+    token: process.env.DUFFEL_API_KEY
 });
 
 app.use(cors());
 app.use(express.json());
 
-// 1. Amadeus IATA Code Resolver (Crucial for Amadeus APIs)
-async function resolveIataCode(cityName) {
+// 1. Duffel Place Resolver (IATA code + coordinates, used for both flights and hotels)
+async function resolvePlace(cityName) {
     if (!cityName || cityName.toLowerCase() === 'not specified') return null;
-    console.log(`Attempting to resolve IATA code for: ${cityName}`);
+    console.log(`Attempting to resolve place for: ${cityName}`);
 
     try {
-        const response = await amadeus.referenceData.locations.get({
-            keyword: cityName,
-            // FIX APPLIED: Changed subType from an array to a comma-separated string to avoid 400 INVALID OPTION error.
-            subType: 'AIRPORT,CITY', 
-        });
-        
-        const locations = response.data;
-        if (locations && locations.length > 0) {
-            const iataCode = locations[0].iataCode;
-            console.log(`Successfully resolved ${cityName} to IATA code: ${iataCode}`);
-            return iataCode;
+        const response = await duffel.suggestions.list({ query: cityName });
+        const places = response.data;
+
+        if (places && places.length > 0) {
+            // Prefer a city-level place (covers all of a city's airports) over a single airport.
+            const place = places.find(p => p.type === 'city') || places[0];
+            // City-level places don't carry their own coordinates; fall back to their first airport's.
+            const coords = (place.latitude != null && place.longitude != null)
+                ? place
+                : (place.airports && place.airports[0]) || {};
+            console.log(`Successfully resolved ${cityName} to IATA code: ${place.iata_code}`);
+            return { iataCode: place.iata_code, latitude: coords.latitude, longitude: coords.longitude };
         } else {
-            console.log(`Amadeus IATA resolution found no results for ${cityName}.`);
+            console.log(`Duffel place resolution found no results for ${cityName}.`);
         }
     } catch (error) {
-        // Improved error logging: print the full error object for better debugging
-        console.error(`Amadeus IATA resolution failed for ${cityName}:`, error);
-        // Fallback or just return null
-        return null; 
+        console.error(`Duffel place resolution failed for ${cityName}:`, error.errors || error.message);
+        return null;
     }
     return null;
 }
 
-// 2. Amadeus Flight Search
-// The Amadeus API usually returns the cheapest flights first, so we ensure prices are numbers.
+// 2. Duffel Flight Search
 
-async function searchFlights(originCityCode, destinationCityCode, departureDate, travelers) {
+const IATA_CODE_PATTERN = /^[A-Z]{3}$/;
+
+async function searchFlights(originCityCode, destinationCityCode, departureDate, travelers, departureCityName, destinationCityName) {
     // Skip if codes are missing or dates are flexible, which leads to mock price on frontend
     if (!originCityCode || !destinationCityCode || departureDate === 'flexible') {
         console.log('Skipping flight search due to missing IATA codes or flexible dates.');
@@ -65,121 +64,66 @@ async function searchFlights(originCityCode, destinationCityCode, departureDate,
     }
 
     try {
-        const response = await amadeus.shopping.flightOffersSearch.get({
-            originLocationCode: originCityCode,
-            destinationLocationCode: destinationCityCode,
-            departureDate: departureDate, 
-            adults: travelers.toString() 
+        // Gemini occasionally returns a city name instead of the requested IATA code;
+        // Duffel validates strictly, so fall back to resolving the name via Duffel's places search.
+        let originCode = originCityCode.toUpperCase();
+        if (!IATA_CODE_PATTERN.test(originCode)) {
+            const resolved = await resolvePlace(departureCityName || originCityCode);
+            originCode = resolved?.iataCode;
+        }
+        let destinationCode = destinationCityCode.toUpperCase();
+        if (!IATA_CODE_PATTERN.test(destinationCode)) {
+            const resolved = await resolvePlace(destinationCityName || destinationCityCode);
+            destinationCode = resolved?.iataCode;
+        }
+        if (!originCode || !destinationCode) {
+            return { status: 'error', message: 'Could not resolve origin/destination to an IATA code.', data: [] };
+        }
+
+        const adultCount = parseInt(travelers, 10) || 1;
+
+        const response = await duffel.offerRequests.create({
+            slices: [{
+                origin: originCode,
+                destination: destinationCode,
+                departure_date: departureDate
+            }],
+            passengers: Array.from({ length: adultCount }, () => ({ type: 'adult' })),
+            cabin_class: 'economy',
+            return_offers: true
         });
 
-        // Ensure price is a number and slice to top 3 cheapest offers
-        const flights = response.data.slice(0, 3).map(offer => ({
-            price: parseFloat(offer.price.total), // Convert to number
-            currency: offer.price.currency,
-            segments: offer.itineraries[0].segments.map(seg => ({
-                departure: seg.departure.iataCode,
-                arrival: seg.arrival.iataCode,
-                departureTime: seg.departure.at,
-                arrivalTime: seg.arrival.at,
-                carrier: seg.carrierCode,
-                duration: seg.duration
-            }))
-        }));
+        const offers = response.data.offers || [];
 
-        return { status: 'success', message: `Found ${response.data.length} flight offers.`, data: flights };
+        // Ensure price is a number and slice to top 3 cheapest offers
+        const flights = offers
+            .slice()
+            .sort((a, b) => parseFloat(a.total_amount) - parseFloat(b.total_amount))
+            .slice(0, 3)
+            .map(offer => ({
+                price: parseFloat(offer.total_amount),
+                currency: offer.total_currency,
+                segments: offer.slices[0].segments.map(seg => ({
+                    departure: seg.origin.iata_code,
+                    arrival: seg.destination.iata_code,
+                    departureTime: seg.departing_at,
+                    arrivalTime: seg.arriving_at,
+                    carrier: seg.marketing_carrier.iata_code,
+                    duration: seg.duration
+                }))
+            }));
+
+        return { status: 'success', message: `Found ${offers.length} flight offers.`, data: flights };
     } catch (error) {
-        console.error('Amadeus Flight Search Error:', error.code || error.message);
-        return { status: 'error', message: `Amadeus API error: ${error.code || 'Unknown Error'}`, data: [] };
+        const duffelErrors = error.errors || error.message;
+        console.error('Duffel Flight Search Error:', duffelErrors);
+        return { status: 'error', message: `Duffel API error: ${JSON.stringify(duffelErrors)}`, data: [] };
     }
 }
 
-// 3. Amadeus Hotel Search (Now prioritizes Quality/Price Ratio)
-
+// 3. Hotel Search — disabled pending Duffel Stays account access (403 "not enabled for your account").
 async function searchHotels(destinationCity, checkInDate, checkOutDate) {
-    const destinationCode = await resolveIataCode(destinationCity);
-    
-    // Skip if IATA code is missing or dates are flexible
-    if (!destinationCode || checkInDate === 'flexible' || checkOutDate === 'flexible') {
-        console.log('Skipping hotel search due to missing IATA code or flexible dates.');
-        return { status: 'skipped', message: 'Fixed dates and IATA code required for hotel pricing.', data: [] };
-    }
-
-    try {
-        // Step 1: Get hotel IDs by city (10 to give us choice for scoring)
-        const hotelListResponse = await amadeus.referenceData.locations.hotels.byCity.get({
-            cityCode: destinationCode,
-            radius: 10,
-            radiusUnit: 'KM',
-            hotelSource: 'ALL'
-        });
-        
-        if (!hotelListResponse.data || hotelListResponse.data.length === 0) {
-            return { status: 'skipped', message: 'No hotels found in destination.', data: [] };
-        }
-
-        // Step 2: Get actual hotel offers with REAL pricing
-        const hotelIds = hotelListResponse.data.slice(0, 10).map(h => h.hotelId).join(',');
-        
-        const offersResponse = await amadeus.shopping.hotelOffersSearch.get({
-            hotelIds: hotelIds,
-            checkInDate: checkInDate,
-            checkOutDate: checkOutDate,
-            adults: 1,
-            roomQuantity: 1,
-            currency: 'USD'
-        });
-
-        if (!offersResponse.data || offersResponse.data.length === 0) {
-            return { status: 'skipped', message: 'No hotel offers available for these dates.', data: [] };
-        }
-
-        // Step 3: Extract, score, and format hotel data to prioritize good review/price ratio
-        const scoredHotels = offersResponse.data.map(hotelOffer => {
-            const hotel = hotelOffer.hotel;
-            const offer = hotelOffer.offers[0]; // Get the cheapest offer for this specific hotel
-
-            // Amadeus rating is often a string ('3', '4', '5'). Convert to number. Default to 3/5.
-            const rating = parseInt(hotel.rating, 10) || 3;
-            const pricePerNight = parseFloat(offer.price.base);
-
-            // Calculate Quality-Price Score: (Rating / Price per night). Higher score is better value.
-            const qualityPriceScore = (pricePerNight > 0) ? (rating / pricePerNight) : 0;
-            
-            return {
-                hotelId: hotel.hotelId,
-                name: hotel.name,
-                address: hotel.address?.cityName || 'N/A',
-                rating: rating,
-                pricePerNight: pricePerNight, // REAL price per night
-                totalPrice: parseFloat(offer.price.total), // REAL total price
-                currency: offer.price.currency,
-                roomType: offer.room?.typeEstimated?.category || 'Standard',
-                checkInDate: offer.checkInDate,
-                checkOutDate: offer.checkOutDate,
-                qualityPriceScore: qualityPriceScore // Used for sorting
-            };
-        });
-
-        // Step 4: Sort by Quality/Price Score (descending) and take top 3
-        const hotels = scoredHotels
-            .filter(h => h.pricePerNight > 0) // Filter out offers without a valid price
-            .sort((a, b) => b.qualityPriceScore - a.qualityPriceScore) // Sort by best value
-            .slice(0, 3); // Take the top 3 best value hotels
-
-        return { 
-            status: 'success', 
-            message: `Found ${hotels.length} hotels prioritized by Quality/Price Ratio.`, 
-            data: hotels 
-        };
-
-    } catch (error) {
-        console.error('Amadeus Hotel Search Error:', error.code || error.message);
-        return { 
-            status: 'error', 
-            message: `Amadeus API error: ${error.code || 'Failed to fetch hotel data'}`, 
-            data: [] 
-        };
-    }
+    return { status: 'skipped', message: 'Hotel search is disabled until Duffel Stays access is enabled on this account.', data: [] };
 }
 
 // 4. WeatherAPI.com Integration
@@ -369,12 +313,12 @@ Important: Be intelligent about inferring missing information. Calculate approxi
         // 2. Execute Parallel API Calls
         console.log('--- Executing API Calls ---');
         const [flights, hotels, weather, news, visa] = await Promise.all([
-            // Amadeus Flights (Departure city must be specified)
+            // Duffel Flights (Departure city must be specified)
             travelPlan.flightRequired === true
-                ? searchFlights(travelPlan.originLocationCode, travelPlan.destinationLocationCode, travelPlan.startDate, travelPlan.travelers)
+                ? searchFlights(travelPlan.originLocationCode, travelPlan.destinationLocationCode, travelPlan.startDate, travelPlan.travelers, travelPlan.departureCity, travelPlan.destinationCity)
                 : { status: 'skipped', message: 'Flights not required by user.', data: [] },
-            
-            // Amadeus Hotels (Use destination city/dates)
+
+            // Duffel Hotels (Use destination city/dates)
             searchHotels(travelPlan.destinationCity, travelPlan.startDate, travelPlan.endDate),
             
             // WeatherAPI (Use destination city/dates)

@@ -16,8 +16,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@duffel/api": "^4.28.0",
     "@google/generative-ai": "^0.21.0",
-    "amadeus": "^11.0.0",
     "axios": "^1.18.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
