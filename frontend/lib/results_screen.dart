@@ -353,7 +353,7 @@ Widget _buildHotelCard() {
     : 'N/A';
 
   final String statusMessage = firstHotel != null
-    ? 'Real prices from Amadeus'
+    ? 'Real prices from Nuitee'
     : _hotelData['message']?.toString() ?? 'No current hotel data found.';
 
   return Container(

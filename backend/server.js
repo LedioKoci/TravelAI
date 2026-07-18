@@ -21,6 +21,29 @@ const duffel = new Duffel({
     token: process.env.DUFFEL_API_KEY
 });
 
+const NUITEE_API_URL = 'https://api.liteapi.travel/v3.0';
+const nuitee = axios.create({
+    baseURL: NUITEE_API_URL,
+    headers: { 'X-API-Key': process.env.NUITEE_API_KEY }
+});
+
+// Common passport countries this app deals with; falls back to 'US' when unmapped since
+// Nuitee only uses guestNationality to determine which rates are visible, not for identity.
+const COUNTRY_NAME_TO_ISO2 = {
+    'united states': 'US', 'usa': 'US', 'united kingdom': 'GB', 'uk': 'GB',
+    'germany': 'DE', 'france': 'FR', 'italy': 'IT', 'spain': 'ES', 'canada': 'CA',
+    'australia': 'AU', 'ireland': 'IE', 'netherlands': 'NL', 'portugal': 'PT',
+    'switzerland': 'CH', 'austria': 'AT', 'belgium': 'BE', 'sweden': 'SE',
+    'norway': 'NO', 'denmark': 'DK', 'poland': 'PL', 'greece': 'GR',
+    'india': 'IN', 'china': 'CN', 'japan': 'JP', 'south korea': 'KR',
+    'brazil': 'BR', 'mexico': 'MX', 'new zealand': 'NZ'
+};
+
+function resolveGuestNationality(passportCountry) {
+    if (!passportCountry) return 'US';
+    return COUNTRY_NAME_TO_ISO2[passportCountry.trim().toLowerCase()] || 'US';
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -121,9 +144,111 @@ async function searchFlights(originCityCode, destinationCityCode, departureDate,
     }
 }
 
-// 3. Hotel Search — disabled pending Duffel Stays account access (403 "not enabled for your account").
-async function searchHotels(destinationCity, checkInDate, checkOutDate) {
-    return { status: 'skipped', message: 'Hotel search is disabled until Duffel Stays access is enabled on this account.', data: [] };
+// 3. Nuitee Hotel Search (prioritizes Quality/Price Ratio)
+
+async function searchHotels(destinationCity, checkInDate, checkOutDate, travelers, passportCountry) {
+    const destination = await resolvePlace(destinationCity);
+
+    // Skip if coordinates are missing or dates are flexible
+    if (!destination || !destination.latitude || !destination.longitude || checkInDate === 'flexible' || checkOutDate === 'flexible') {
+        console.log('Skipping hotel search due to missing location or flexible dates.');
+        return { status: 'skipped', message: 'Fixed dates and a resolvable destination are required for hotel pricing.', data: [] };
+    }
+
+    try {
+        // Step 1: Get hotel metadata (name, rating, address) for candidates near the destination.
+        const hotelListResponse = await nuitee.get('/data/hotels', {
+            params: {
+                latitude: destination.latitude,
+                longitude: destination.longitude,
+                radius: 15000,
+                limit: 30
+            }
+        });
+
+        const hotelList = hotelListResponse.data.data;
+        if (!hotelList || hotelList.length === 0) {
+            return { status: 'skipped', message: 'No hotels found in destination.', data: [] };
+        }
+
+        // Favor well-reviewed hotels among the candidates we'll check pricing for.
+        const candidates = hotelList
+            .slice()
+            .sort((a, b) => (b.rating || 0) - (a.rating || 0))
+            .slice(0, 20);
+        const hotelMetaById = new Map(candidates.map(h => [h.id, h]));
+
+        // Step 2: Get real-time pricing for those candidate hotels.
+        const nights = Math.max(1, Math.ceil((new Date(checkOutDate) - new Date(checkInDate)) / (1000 * 60 * 60 * 24)));
+        const adultCount = parseInt(travelers, 10) || 1;
+
+        const ratesResponse = await nuitee.post('/hotels/rates', {
+            hotelIds: candidates.map(h => h.id),
+            occupancies: [{ adults: adultCount }],
+            guestNationality: resolveGuestNationality(passportCountry),
+            currency: 'USD',
+            checkin: checkInDate,
+            checkout: checkOutDate,
+            maxRatesPerHotel: 1
+        });
+
+        const rateResults = ratesResponse.data.data;
+        if (!rateResults || rateResults.length === 0) {
+            return { status: 'skipped', message: 'No hotel offers available for these dates.', data: [] };
+        }
+
+        // Step 3: Join price with metadata, score, and format hotel data to prioritize good review/price ratio
+        const scoredHotels = rateResults
+            .map(result => {
+                const meta = hotelMetaById.get(result.hotelId);
+                const roomType = result.roomTypes && result.roomTypes[0];
+                if (!meta || !roomType) return null;
+
+                // Nuitee ratings are on a 1-10 scale; normalize to the 1-5 scale used elsewhere in the app.
+                const rating = meta.rating ? meta.rating / 2 : 3;
+                const totalPrice = roomType.offerRetailRate.amount;
+                const pricePerNight = totalPrice / nights;
+
+                // Calculate Quality-Price Score: (Rating / Price per night). Higher score is better value.
+                const qualityPriceScore = (pricePerNight > 0) ? (rating / pricePerNight) : 0;
+
+                return {
+                    hotelId: meta.id,
+                    name: meta.name,
+                    address: meta.address || meta.city || 'N/A',
+                    rating: rating,
+                    pricePerNight: pricePerNight,
+                    totalPrice: totalPrice,
+                    currency: roomType.offerRetailRate.currency,
+                    roomType: roomType.rates?.[0]?.name || 'Standard',
+                    checkInDate: checkInDate,
+                    checkOutDate: checkOutDate,
+                    qualityPriceScore: qualityPriceScore // Used for sorting
+                };
+            })
+            .filter(Boolean);
+
+        // Sort by Quality/Price Score (descending) and take top 3
+        const hotels = scoredHotels
+            .filter(h => h.pricePerNight > 0) // Filter out offers without a valid price
+            .sort((a, b) => b.qualityPriceScore - a.qualityPriceScore) // Sort by best value
+            .slice(0, 3); // Take the top 3 best value hotels
+
+        return {
+            status: 'success',
+            message: `Found ${hotels.length} hotels prioritized by Quality/Price Ratio.`,
+            data: hotels
+        };
+
+    } catch (error) {
+        const nuiteeError = error.response?.data || error.message;
+        console.error('Nuitee Hotel Search Error:', nuiteeError);
+        return {
+            status: 'error',
+            message: `Nuitee API error: ${JSON.stringify(nuiteeError)}`,
+            data: []
+        };
+    }
 }
 
 // 4. WeatherAPI.com Integration
@@ -319,7 +444,7 @@ Important: Be intelligent about inferring missing information. Calculate approxi
                 : { status: 'skipped', message: 'Flights not required by user.', data: [] },
 
             // Duffel Hotels (Use destination city/dates)
-            searchHotels(travelPlan.destinationCity, travelPlan.startDate, travelPlan.endDate),
+            searchHotels(travelPlan.destinationCity, travelPlan.startDate, travelPlan.endDate, travelPlan.travelers, travelPlan.passportCountry),
             
             // WeatherAPI (Use destination city/dates)
             getWeatherForecast(travelPlan.destinationCity, travelPlan.startDate, travelPlan.endDate),
