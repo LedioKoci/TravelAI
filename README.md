@@ -36,7 +36,7 @@ TravelAI is a modern, AI-assisted trip-planning application built with **Flutter
 | 7. Save a Travel | 8. Empty Sidebar | 9. Saved Travels List |
 | --- | --- | --- |
 | <img src="screenshots/travel-saved.PNG" width="250"/> | <img src="screenshots/sidebar-empty-left.PNG" width="250"/> | <img src="screenshots/sidebar-savedTravels-left.PNG" width="250"/> |
-| One tap persists the generated plan locally so it can be revisited without another API call. | Friendly empty state guiding first-time users toward saving a trip. | Sliding drawer listing saved travels with quick reopen and delete actions. |
+| Able to save with one tap the generated plan locally so it can be revisited without another API call. | Friendly empty state guiding first-time users toward saving a trip. | Sliding drawer listing saved travels with quick reopen and delete actions. |
 
 ---
 
