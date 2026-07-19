@@ -555,3 +555,12 @@ if (require.main === module) {
 }
 
 module.exports = app;
+
+// Exposed for unit testing of pure helper logic only
+module.exports._internal = {
+    resolveGuestNationality,
+    IATA_CODE_PATTERN,
+    toDateOnly,
+    formatDate,
+    mapForecastDay
+};
