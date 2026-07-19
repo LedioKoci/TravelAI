@@ -14,7 +14,7 @@
 
 ---
 
-TravelAI is a modern, AI-assisted trip-planning application built with **Flutter** and powered by a **Node.js/Express** backend utilizing the **Google Gemini API**. Users describe a trip in plain English — destination, dates, origin city — and TravelAI parses the request with Gemini, then assembles a complete itinerary by pulling real flights from **Duffel**, real hotel pricing from **Nuitee**, a live weather forecast, destination news, and a visa requirement check into a single, structured travel plan.
+TravelAI is a modern, AI-assisted trip-planning application built with **Flutter** and powered by a **Node.js/Express** backend utilizing the **Google Gemini API**. Users describe a trip in any language — destination, dates, origin city — and TravelAI parses the request with Gemini, then assembles a complete itinerary by pulling real flights from **Duffel**, real hotel pricing from **Nuitee**, a live weather forecast, destination news, and a visa requirement check into a single, structured travel plan.
 
 ---
 
