@@ -383,6 +383,10 @@ class _ResultsScreenState extends State<ResultsScreen>
                   ),
                 ],
               ),
+              if (firstFlight != null) ...[
+                const SizedBox(height: 16),
+                _buildAirlineInfo(firstFlight),
+              ],
               const SizedBox(height: 20),
               Divider(color: Colors.grey.shade200),
               const SizedBox(height: 12),
@@ -415,6 +419,76 @@ class _ResultsScreenState extends State<ResultsScreen>
                   fontStyle: FontStyle.italic,
                 ),
               ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildAirlineInfo(Map<String, dynamic> flight) {
+  final String? airline = flight['airline'] as String?;
+  final List<dynamic> segments = flight['segments'] as List<dynamic>? ?? [];
+
+  final String flightNumbers = segments
+      .map((s) => (s as Map<String, dynamic>)['flightNumber']?.toString())
+      .whereType<String>()
+      .join(' · ');
+
+  // Codeshares: the airline that sold the ticket can differ from the one actually
+  // flying the plane, so surface it separately when present.
+  final Set<String> operatingCarriers = segments
+      .map((s) => (s as Map<String, dynamic>)['operatingCarrier']?.toString())
+      .whereType<String>()
+      .toSet();
+
+  if (airline == null && flightNumbers.isEmpty) {
+    return const SizedBox.shrink();
+  }
+
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: Colors.blue.shade50,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.airplanemode_active, color: Colors.blue.shade400, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                airline ?? 'Airline',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.blue.shade800,
+                ),
+              ),
+              if (flightNumbers.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  flightNumbers,
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ],
+              if (operatingCarriers.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Operated by ${operatingCarriers.join(', ')}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic,
+                    color: Colors.grey.shade500,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

@@ -126,13 +126,22 @@ async function searchFlights(originCityCode, destinationCityCode, departureDate,
             .map(offer => ({
                 price: parseFloat(offer.total_amount),
                 currency: offer.total_currency,
+                airline: offer.owner?.name,
                 segments: offer.slices[0].segments.map(seg => ({
                     departure: seg.origin.iata_code,
                     arrival: seg.destination.iata_code,
                     departureTime: seg.departing_at,
                     arrivalTime: seg.arriving_at,
-                    carrier: seg.marketing_carrier.iata_code,
-                    duration: seg.duration
+                    duration: seg.duration,
+                    flightNumber: `${seg.marketing_carrier.iata_code}${seg.marketing_carrier_flight_number}`,
+                    marketingCarrier: seg.marketing_carrier.name,
+                    marketingCarrierIata: seg.marketing_carrier.iata_code,
+                    // Codeshares: the ticketed/marketing airline can differ from the airline actually
+                    // flying the plane. Only surface operatingCarrier when it's genuinely different,
+                    // so callers researching the flight know who's really operating it.
+                    operatingCarrier: seg.operating_carrier && seg.operating_carrier.iata_code !== seg.marketing_carrier.iata_code
+                        ? seg.operating_carrier.name
+                        : null
                 }))
             }));
 
@@ -355,23 +364,32 @@ function mapForecastDay(day) {
 }
 
 // 5. NewsAPI Integration
-async function getDestinationNews(destination) {
+async function getDestinationNews(destination, country, newsQuery) {
     const API_KEY = process.env.NEWS_API_KEY;
     if (!API_KEY) {
         return { status: 'error', message: 'NEWS_API_KEY not configured.', articles: [] };
     }
 
+    // A bare city/country name is ambiguous to NewsAPI's full-text search (e.g. "Paris" also
+    // matches Paris Hilton, Paris, Texas, etc.), and any article merely mentioning the word
+    // gets pulled in. Prefer the AI-generated boolean query, which AND-combines the city and
+    // country to disambiguate; fall back to building one the same way if it's missing.
+    const query = newsQuery || (country && country !== 'not specified'
+        ? `"${destination}" AND "${country}"`
+        : `"${destination}"`);
+
     try {
-        // Search using the destination as a query
-        const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(destination)}&sortBy=publishedAt&language=en&pageSize=3&apiKey=${API_KEY}`;
+        const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&searchIn=title,description&sortBy=relevancy&language=en&pageSize=5&apiKey=${API_KEY}`;
         const response = await axios.get(url);
-        
-        const articles = response.data.articles.map(article => ({
-            title: article.title,
-            source: article.source.name,
-            url: article.url,
-            publishedAt: article.publishedAt
-        }));
+
+        const articles = response.data.articles
+            .slice(0, 3)
+            .map(article => ({
+                title: article.title,
+                source: article.source.name,
+                url: article.url,
+                publishedAt: article.publishedAt
+            }));
 
         return { status: 'success', articles: articles };
 
@@ -450,7 +468,8 @@ Generate a JSON response with the following structure:
   "travelers": "number of adult travelers (estimate 1 if not specified)",
   "budget": "low/medium/high/luxury (estimate based on context or use number if given)",
   "interests": ["list", "of", "keywords"],
-  "flightRequired": true/false
+  "flightRequired": true/false,
+  "newsSearchQuery": "a precise boolean query for the NewsAPI /v2/everything endpoint that disambiguates the destination from unrelated people/places/topics that share its name, e.g. for Paris, France: '\"Paris\" AND \"France\"'. Always quote multi-word names and AND-combine the city with its country (or a well-known disambiguating term if the city name is highly ambiguous, e.g. a country-less region)."
 }
 
 Important: Be intelligent about inferring missing information. Calculate approximate future dates if requested (e.g., 'next month'). Also, you need to predict the departure and arrival city IATA codes.`;
@@ -475,13 +494,14 @@ Important: Be intelligent about inferring missing information. Calculate approxi
                         "travelers": { "type": "STRING" },
                         "budget": { "type": "STRING" },
                         "interests": { "type": "ARRAY", "items": { "type": "STRING" } },
-                        "flightRequired": { "type": "BOOLEAN" }
+                        "flightRequired": { "type": "BOOLEAN" },
+                        "newsSearchQuery": { "type": "STRING" }
                     },
                     required: [
                         "destinationCity", "originLocationCode", "destinationLocationCode",
                         "destinationCountry", "departureCity", "passportCountry",
                         "startDate", "endDate", "duration", "travelers",
-                        "budget", "interests", "flightRequired"
+                        "budget", "interests", "flightRequired", "newsSearchQuery"
                     ]
                 }
             }
@@ -515,8 +535,8 @@ Important: Be intelligent about inferring missing information. Calculate approxi
             // WeatherAPI (Use destination city/dates)
             getWeatherForecast(travelPlan.destinationCity, travelPlan.startDate, travelPlan.endDate),
             
-            // NewsAPI (Use destination city/country)
-            getDestinationNews(travelPlan.destinationCity),
+            // NewsAPI (Use destination city/country, with the AI-generated disambiguating query)
+            getDestinationNews(travelPlan.destinationCity, travelPlan.destinationCountry, travelPlan.newsSearchQuery),
             
             // RapidAPI Visa (Use passport and destination country)
             checkVisaRequirement(travelPlan.passportCountry, travelPlan.destinationCountry)
