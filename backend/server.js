@@ -370,12 +370,14 @@ async function getDestinationNews(destination, country, newsQuery) {
         return { status: 'error', message: 'NEWS_API_KEY not configured.', articles: [] };
     }
 
-    // A bare city/country name is ambiguous to NewsAPI's full-text search (e.g. "Paris" also
-    // matches Paris Hilton, Paris, Texas, etc.), and any article merely mentioning the word
-    // gets pulled in. Prefer the AI-generated boolean query, which AND-combines the city and
-    // country to disambiguate; fall back to building one the same way if it's missing.
+    // News is meant to give broader country-level context (safety, travel advisories, current
+    // events), not city-specific coverage, so the query is anchored on the country rather than
+    // the destination city. A bare country name is still ambiguous to NewsAPI's full-text search
+    // (e.g. "Georgia" also matches the US state), so prefer the AI-generated boolean query, which
+    // disambiguates it; fall back to a quoted country name (AND-combined with the city only as a
+    // last resort if no country was resolved) if the AI field is missing.
     const query = newsQuery || (country && country !== 'not specified'
-        ? `"${destination}" AND "${country}"`
+        ? `"${country}"`
         : `"${destination}"`);
 
     try {
@@ -469,7 +471,7 @@ Generate a JSON response with the following structure:
   "budget": "low/medium/high/luxury (estimate based on context or use number if given)",
   "interests": ["list", "of", "keywords"],
   "flightRequired": true/false,
-  "newsSearchQuery": "a precise boolean query for the NewsAPI /v2/everything endpoint that disambiguates the destination from unrelated people/places/topics that share its name, e.g. for Paris, France: '\"Paris\" AND \"France\"'. Always quote multi-word names and AND-combine the city with its country (or a well-known disambiguating term if the city name is highly ambiguous, e.g. a country-less region)."
+  "newsSearchQuery": "a precise boolean query for the NewsAPI /v2/everything endpoint to find general news coverage about the destination COUNTRY as a whole (not the specific city), that disambiguates the country from unrelated people/places/topics sharing its name, e.g. for a trip to Paris, France: '\"France\"'; for Georgia (the country): '\"Georgia\" AND (Tbilisi OR Caucasus) NOT (Atlanta OR \"United States\")'. Always quote the country name and add a disambiguating AND/NOT clause when the name is ambiguous with a US state, person, or other well-known entity."
 }
 
 Important: Be intelligent about inferring missing information. Calculate approximate future dates if requested (e.g., 'next month'). Also, you need to predict the departure and arrival city IATA codes.`;
