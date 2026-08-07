@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'config.dart';
 import 'results_screen.dart';
+import 'services/auth_service.dart';
+import 'services/profile_service.dart';
+import 'widgets/account_sheet.dart';
 import 'widgets/travel_sidebar.dart';
-
-// Set via --dart-define=API_BASE_URL=https://your-backend.vercel.app when building.
-const String kApiBaseUrl = String.fromEnvironment(
-  'API_BASE_URL',
-  defaultValue: 'https://backend-puce-chi-41.vercel.app',
-);
 
 void main() {
   runApp(const TravelAIApp());
@@ -47,6 +45,13 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
   late AnimationController _animController;
   late Animation<double> _fadeAnimation;
 
+  // "Departing from home?" toggle state — see docs/supabase-schema-design.md §3.1.
+  // _homeCity is only ever used for display here; the actual fallback logic lives
+  // entirely on the backend, applied *after* Gemini parses the query, never before.
+  bool _departingFromHome = false;
+  bool _isLoggedIn = false;
+  String? _homeCity;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +63,7 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
       CurvedAnimation(parent: _animController, curve: Curves.easeIn),
     );
     _animController.forward();
+    _loadAccountContext();
   }
 
   @override
@@ -65,6 +71,39 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
     _controller.dispose();
     _animController.dispose();
     super.dispose();
+  }
+
+  /// Best-effort: fetches whether the user is signed in and, if so, their saved
+  /// home city, purely to label the toggle. Failure here never blocks search.
+  Future<void> _loadAccountContext() async {
+    final loggedIn = await AuthService.isLoggedIn();
+    String? homeCity;
+    if (loggedIn) {
+      try {
+        final profile = await ProfileService.getProfile();
+        homeCity = profile['homeCity'] as String?;
+      } catch (_) {
+        // Ignore — the toggle just won't show a home city until this succeeds.
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _isLoggedIn = loggedIn;
+      _homeCity = homeCity;
+    });
+  }
+
+  Future<void> _openAccountSheet() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => const AccountSheet(),
+    );
+    _loadAccountContext();
   }
 
   Future<void> _searchTravel() async {
@@ -84,10 +123,21 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
     setState(() => _isLoading = true);
 
     try {
+      // /api/generate-plan never requires auth (optionalAuthenticate on the
+      // backend), so this stays a plain POST rather than going through
+      // ApiClient's refresh-and-retry — an expired/missing token here just means
+      // the "departing from home" fallback silently doesn't apply.
+      final accessToken = await AuthService.accessToken;
       final response = await http.post(
         Uri.parse('$kApiBaseUrl/api/generate-plan'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'query': _controller.text}),
+        headers: {
+          'Content-Type': 'application/json',
+          if (accessToken != null) 'Authorization': 'Bearer $accessToken',
+        },
+        body: json.encode({
+          'query': _controller.text,
+          'departingFromHome': _departingFromHome,
+        }),
       ).timeout(const Duration(seconds: 30)); // Added a timeout for robustness
 
       if (response.statusCode == 200) {
@@ -135,6 +185,13 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: IconThemeData(color: Colors.blue.shade700),
+        actions: [
+          IconButton(
+            icon: Icon(_isLoggedIn ? Icons.account_circle : Icons.account_circle_outlined),
+            tooltip: _isLoggedIn ? 'Account' : 'Sign in',
+            onPressed: _openAccountSheet,
+          ),
+        ],
       ),
       extendBodyBehindAppBar: true,
       body: SafeArea(
@@ -252,8 +309,15 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
                         onSubmitted: (_) => _searchTravel(),
                       ),
                     ),
-                    const SizedBox(height: 30),
-                    
+                    const SizedBox(height: 16),
+
+                    // "Departing from home?" toggle — see docs/supabase-schema-design.md
+                    // §3.1. The value is only sent alongside the query; the
+                    // Gemini prompt itself never sees the home city.
+                    if (!_isLoading) _buildDepartingFromHomeToggle(),
+
+                    const SizedBox(height: 14),
+
                     // Loading indicator
                     if (_isLoading)
                       Column(
@@ -302,6 +366,47 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildDepartingFromHomeToggle() {
+    final hasHomeCity = _homeCity != null && _homeCity!.isNotEmpty;
+
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.home_outlined, size: 18, color: Colors.blue.shade400),
+            const SizedBox(width: 8),
+            Text(
+              'Departing from home?',
+              style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+            Switch(
+              value: _departingFromHome,
+              activeColor: Colors.blue.shade600,
+              onChanged: hasHomeCity
+                  ? (value) => setState(() => _departingFromHome = value)
+                  : (_) => _openAccountSheet(),
+            ),
+          ],
+        ),
+        if (_departingFromHome && hasHomeCity)
+          Text(
+            "We'll use $_homeCity as your departure city if you don't mention one.",
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+          )
+        else if (!hasHomeCity)
+          GestureDetector(
+            onTap: _openAccountSheet,
+            child: Text(
+              _isLoggedIn ? 'Set a home city to use this' : 'Sign in to use this',
+              style: TextStyle(fontSize: 12, color: Colors.blue.shade400, decoration: TextDecoration.underline),
+            ),
+          ),
+      ],
     );
   }
 

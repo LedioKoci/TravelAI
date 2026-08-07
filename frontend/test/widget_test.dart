@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:travelai/main.dart';
+import 'package:travelai/services/auth_service.dart';
+
+import 'test_helpers/in_memory_token_storage.dart';
 
 void main() {
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    // Logged out by default: main.dart's account-context/toggle logic and the
+    // saved-travels sidebar both read AuthService on launch, so they must never
+    // touch the real (unmocked, platform-channel-backed) secure storage in tests.
+    AuthService.debugOverrideStorage(InMemoryTokenStorage());
   });
 
   testWidgets('renders the TravelAI title and search field on launch',
@@ -32,7 +37,14 @@ void main() {
       (WidgetTester tester) async {
     await tester.pumpWidget(const TravelAIApp());
 
-    await tester.tap(find.text('Tokyo for 7 days'));
+    // The "Departing from home?" toggle pushes the suggestion chips further
+    // down the page, past the default test viewport — scroll it into view
+    // before tapping, same as a real device would on a shorter screen.
+    final chip = find.text('Tokyo for 7 days');
+    await tester.ensureVisible(chip);
+    await tester.pump();
+
+    await tester.tap(chip);
     await tester.pump();
 
     final textField = tester.widget<TextField>(find.byType(TextField));

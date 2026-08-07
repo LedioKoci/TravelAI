@@ -1,9 +1,14 @@
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import 'api_client.dart';
 
 /// A travel plan the user has explicitly chosen to save, so it can be
 /// reopened later without re-calling the Gemini-backed generate-plan API.
+///
+/// Backed by the cloud (`GET/POST/DELETE /api/travels`) rather than on-device
+/// storage — see docs/supabase-schema-design.md §8 ("Login required to save").
+/// The shape here matches the backend's response 1:1, so toJson/fromJson stay
+/// simple, direct mirrors of the wire format.
 class SavedTravel {
   final String id;
   final String destinationCity;
@@ -47,64 +52,35 @@ class SavedTravel {
 }
 
 class TravelStorageService {
-  static const String _storageKey = 'saved_travels';
-
+  /// Throws [AuthRequiredException] (via ApiClient) when the user isn't signed in.
   static Future<List<SavedTravel>> getAll() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_storageKey) ?? [];
+    final response = await ApiClient.get('/api/travels');
+    if (response.statusCode != 200) {
+      throw Exception('Failed to load saved travels (${response.statusCode})');
+    }
 
-    final travels = raw
-        .map((entry) {
-          try {
-            return SavedTravel.fromJson(
-                json.decode(entry) as Map<String, dynamic>);
-          } catch (_) {
-            return null;
-          }
-        })
-        .whereType<SavedTravel>()
-        .toList();
-
-    travels.sort((a, b) => b.savedAt.compareTo(a.savedAt));
-    return travels;
+    final List<dynamic> raw = json.decode(response.body) as List<dynamic>;
+    return raw.map((entry) => SavedTravel.fromJson(entry as Map<String, dynamic>)).toList();
   }
 
-  /// Saves [travelPlan] as a new entry and returns it.
+  /// Saves [travelPlan] as a new entry and returns it. Throws
+  /// [AuthRequiredException] (via ApiClient) when the user isn't signed in —
+  /// callers (see results_screen.dart) should prompt sign-in before calling this
+  /// rather than relying solely on the exception, so the user isn't surprised.
   static Future<SavedTravel> save(Map<String, dynamic> travelPlan) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_storageKey) ?? [];
-
-    final planSummary =
-        travelPlan['planSummary'] as Map<String, dynamic>? ?? {};
-
-    final saved = SavedTravel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      destinationCity:
-          planSummary['destinationCity']?.toString() ?? 'Unknown City',
-      departureCity: planSummary['departureCity']?.toString() ?? '',
-      startDate: planSummary['startDate']?.toString() ?? 'flexible',
-      endDate: planSummary['endDate']?.toString() ?? 'flexible',
-      savedAt: DateTime.now(),
-      travelPlan: travelPlan,
-    );
-
-    raw.add(json.encode(saved.toJson()));
-    await prefs.setStringList(_storageKey, raw);
-    return saved;
+    final response = await ApiClient.post('/api/travels', body: {'travelPlan': travelPlan});
+    if (response.statusCode != 201) {
+      throw Exception('Failed to save travel (${response.statusCode})');
+    }
+    return SavedTravel.fromJson(json.decode(response.body) as Map<String, dynamic>);
   }
 
   static Future<void> delete(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_storageKey) ?? [];
-
-    raw.removeWhere((entry) {
-      try {
-        return (json.decode(entry) as Map<String, dynamic>)['id'] == id;
-      } catch (_) {
-        return false;
-      }
-    });
-
-    await prefs.setStringList(_storageKey, raw);
+    final response = await ApiClient.delete('/api/travels/$id');
+    // A 404 here means it's already gone (e.g. deleted from another device) —
+    // treat that the same as a successful delete rather than surfacing an error.
+    if (response.statusCode != 204 && response.statusCode != 404) {
+      throw Exception('Failed to delete travel (${response.statusCode})');
+    }
   }
 }

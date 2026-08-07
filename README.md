@@ -48,8 +48,8 @@ TravelAI is a modern, AI-assisted trip-planning application built with **Flutter
 * **Weather Forecast:** A day-by-day forecast for the exact travel window is pulled from **WeatherAPI.com** and mapped to each day of the trip.
 * **Destination News:** The latest relevant headlines about the destination are pulled in via **NewsAPI** for extra situational context.
 * **Visa Requirement Check:** A guest-nationality-aware visa requirement lookup flags whether the traveler needs a visa for the destination.
-* **Local Travel Persistence:** Saved travel plans are cached on-device with `shared_preferences`, so reopening a saved trip costs zero additional API calls.
-* **Cloud Accounts & Sync (backend, in progress):** A Supabase-backed `/api/auth` and `/api/travels` API now exists for real user accounts and cross-device saved-travel sync — see [Cloud Backend & Accounts](#-cloud-backend--accounts) below. The Flutter app doesn't call it yet; `shared_preferences` remains the active storage path until that wiring lands.
+* **Accounts & Cloud-Synced Saved Travels:** Email/password accounts backed by Supabase Auth; saved travels live in the cloud (`saved_travels`) and follow the user across devices, gated behind sign-in — see [Cloud Backend & Accounts](#-cloud-backend--accounts) below.
+* **"Departing from Home?" Toggle:** A one-tap toggle on the search screen fills in the departure city from the signed-in user's saved home city when their query doesn't mention one — applied deterministically after Gemini parses the query, never fed into the prompt itself.
 
 ---
 
@@ -57,9 +57,9 @@ TravelAI is a modern, AI-assisted trip-planning application built with **Flutter
 
 ### Frontend Technology Stack
 * **Framework:** Flutter (Dart)
-* **Networking:** `http` for calling the backend's `/api/generate-plan` endpoint
-* **Local Storage:** `shared_preferences` for persisting saved travel plans as JSON
-* **Structure:** `main.dart` (search entry point), `results_screen.dart` (itinerary display), `widgets/travel_sidebar.dart` (saved travels drawer), `services/travel_storage_service.dart` (local persistence layer)
+* **Networking:** `http` for calling the backend's `/api/generate-plan`, `/api/auth`, `/api/travels`, and `/api/profile` endpoints
+* **Secure Token Storage:** `flutter_secure_storage` holds the access/refresh token pair (see `services/token_storage.dart`, `services/auth_service.dart`)
+* **Structure:** `main.dart` (search entry point + account icon + "Departing from home?" toggle), `results_screen.dart` (itinerary display, save gated behind sign-in), `screens/auth_screen.dart` (login/signup), `widgets/account_sheet.dart` (account status, home-city editor, logout), `widgets/travel_sidebar.dart` (cloud-synced saved travels drawer), `services/travel_storage_service.dart` + `services/api_client.dart` (authenticated `/api/travels` client with transparent token refresh)
 
 ### Backend Architecture Middleware
 * **Runtime Platform:** Node.js (Express framework runtime)

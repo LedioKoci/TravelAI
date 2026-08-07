@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'screens/auth_screen.dart';
+import 'services/auth_service.dart';
 import 'services/travel_storage_service.dart';
 import 'widgets/travel_sidebar.dart';
 
@@ -71,6 +73,23 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   Future<void> _toggleSave() async {
     if (_isSaving) return;
+
+    // Saving requires a signed-in account — see docs/supabase-schema-design.md §8
+    // ("Login required to save"). Deleting an already-saved travel never reaches
+    // here while logged out, since being saved implies a session already got us
+    // this _savedId in the first place.
+    if (!_isSaved) {
+      final loggedIn = await AuthService.isLoggedIn();
+      if (!loggedIn) {
+        if (!mounted) return;
+        final signedIn = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(builder: (_) => const AuthScreen()),
+        );
+        if (signedIn != true) return; // User backed out of signing in.
+      }
+    }
+
     setState(() => _isSaving = true);
 
     try {
@@ -96,6 +115,12 @@ class _ResultsScreenState extends State<ResultsScreen>
             const SnackBar(content: Text('Travel saved!')),
           );
         }
+      }
+    } on AuthRequiredException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please sign in again to continue')),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);

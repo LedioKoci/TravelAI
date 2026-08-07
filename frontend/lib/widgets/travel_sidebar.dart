@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../results_screen.dart';
+import '../screens/auth_screen.dart';
+import '../services/auth_service.dart';
 import '../services/travel_storage_service.dart';
 
-/// A Claude/Gemini-style history sidebar listing travels the user has
-/// manually saved. Tapping an entry reopens it from local storage — no
-/// backend/Gemini call is made, so it costs no API tokens.
+/// A Claude/Gemini-style history sidebar listing travels the user has saved to
+/// their cloud account. Reopening an entry uses the already-fetched plan — no
+/// fresh Gemini call is made, so it costs no API tokens. Listing requires being
+/// signed in (see docs/supabase-schema-design.md §8); logged-out users see a
+/// sign-in prompt here instead of an empty list.
 class TravelSidebar extends StatefulWidget {
   const TravelSidebar({Key? key}) : super(key: key);
 
@@ -55,12 +59,15 @@ class _TravelSidebarState extends State<TravelSidebar> {
                 children: [
                   Icon(Icons.travel_explore, color: Colors.blue.shade700),
                   const SizedBox(width: 8),
-                  Text(
-                    'Saved Travels',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue.shade800,
+                  Expanded(
+                    child: Text(
+                      'Saved Travels',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade800,
+                      ),
                     ),
                   ),
                 ],
@@ -73,6 +80,19 @@ class _TravelSidebarState extends State<TravelSidebar> {
                 builder: (context, snapshot) {
                   if (snapshot.connectionState != ConnectionState.done) {
                     return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (snapshot.hasError) {
+                    if (snapshot.error is AuthRequiredException) {
+                      return _buildSignInPrompt();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        'Could not load your saved travels.',
+                        style: TextStyle(color: Colors.grey.shade600),
+                      ),
+                    );
                   }
 
                   final travels = snapshot.data ?? [];
@@ -119,7 +139,13 @@ class _TravelSidebarState extends State<TravelSidebar> {
                               color: Colors.grey.shade400, size: 20),
                           tooltip: 'Remove',
                           onPressed: () async {
-                            await TravelStorageService.delete(travel.id);
+                            // Best-effort: if the session died between loading
+                            // the list and tapping delete, _refresh() below will
+                            // surface the sign-in prompt instead of the item
+                            // just silently staying put.
+                            try {
+                              await TravelStorageService.delete(travel.id);
+                            } catch (_) {}
                             _refresh();
                           },
                         ),
@@ -143,6 +169,36 @@ class _TravelSidebarState extends State<TravelSidebar> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildSignInPrompt() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Sign in to see your saved travels.',
+            style: TextStyle(color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton(
+            onPressed: () async {
+              final signedIn = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => const AuthScreen()),
+              );
+              if (signedIn == true) _refresh();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Sign in'),
+          ),
+        ],
       ),
     );
   }
