@@ -47,6 +47,8 @@ app.*.map.json
 
 frontend/build/
 
+supabase/
+
 
 # env file
 .env
