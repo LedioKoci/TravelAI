@@ -3,17 +3,17 @@ process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-key';
 const request = require('supertest');
 
 // Mock the Gemini SDK so no real network call happens and we control the "AI" response.
-const generateContentMock = jest.fn();
+const mockGenerateContent = jest.fn();
 jest.mock('@google/generative-ai', () => ({
     GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
         getGenerativeModel: jest.fn().mockReturnValue({
-            generateContent: generateContentMock
+            generateContent: mockGenerateContent
         })
     }))
 }));
 
 function mockGeminiText(text) {
-    generateContentMock.mockResolvedValueOnce({
+    mockGenerateContent.mockResolvedValueOnce({
         response: {
             candidates: [{ content: { parts: [{ text }] } }]
         }
@@ -24,7 +24,7 @@ const app = require('../server');
 
 describe('POST /api/generate-plan', () => {
     beforeEach(() => {
-        generateContentMock.mockReset();
+        mockGenerateContent.mockReset();
     });
 
     test('returns 400 when query is missing from the request body', async () => {

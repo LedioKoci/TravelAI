@@ -6,6 +6,12 @@ const { Duffel } = require('@duffel/api');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
+const supabaseAdmin = require('./lib/supabaseAdmin');
+const { optionalAuthenticate } = require('./middleware/authenticate');
+const authRouter = require('./routes/auth');
+const travelsRouter = require('./routes/travels');
+const profileRouter = require('./routes/profile');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -46,6 +52,10 @@ function resolveGuestNationality(passportCountry) {
 
 app.use(cors());
 app.use(express.json());
+
+app.use('/api/auth', authRouter);
+app.use('/api/travels', travelsRouter);
+app.use('/api/profile', profileRouter);
 
 // 1. Duffel Place Resolver (IATA code + coordinates, used for both flights and hotels)
 async function resolvePlace(cityName) {
@@ -437,11 +447,42 @@ async function checkVisaRequirement(passportCountry, destinationCountry) {
     }
 }
 
+// 7. "Departing from home?" toggle fallback — see docs/supabase-schema-design.md §3.1.
+//
+// Deliberately never sent to the Gemini prompt: injecting a known home city into the
+// prompt would collide with whatever origin the user's own free text names, producing
+// ambiguous parses. Instead this runs after Gemini has already parsed the query, and
+// only fills the gap when Gemini itself came back with no explicit departure city —
+// anything the user actually typed always wins over the toggle.
+async function applyDepartingFromHomeFallback(travelPlan, userId) {
+    const hasExplicitDeparture = travelPlan.departureCity &&
+        travelPlan.departureCity.toLowerCase() !== 'not specified';
+    if (hasExplicitDeparture || !userId) return;
+
+    const { data: profile, error } = await supabaseAdmin
+        .from('profiles')
+        .select('home_city')
+        .eq('id', userId)
+        .maybeSingle();
+
+    if (error) {
+        console.error('Failed to load profile for departingFromHome fallback:', error.message);
+        return;
+    }
+    if (profile && profile.home_city) {
+        console.log(`Filling departure city from home_city fallback: ${profile.home_city}`);
+        travelPlan.departureCity = profile.home_city;
+    }
+}
+
 // --- Main Endpoint ---
 
-app.post('/api/generate-plan', async (req, res) => {
+// optionalAuthenticate: generating a plan never requires login, but the
+// "departingFromHome" toggle only has something to fall back to when the caller is
+// signed in, so we read the identity if present without rejecting anonymous requests.
+app.post('/api/generate-plan', optionalAuthenticate, async (req, res) => {
     try {
-        const { query } = req.body;
+        const { query, departingFromHome } = req.body;
 
         if (!query) {
             return res.status(400).json({ error: 'Query is required' });
@@ -522,7 +563,14 @@ Important: Be intelligent about inferring missing information. Calculate approxi
                 rawResponse: text
             });
         }
-        
+
+        // "Departing from home?" toggle: only applies when Gemini itself left the
+        // departure city unspecified, and only for a signed-in caller with a saved
+        // home city — see applyDepartingFromHomeFallback above.
+        if (departingFromHome === true) {
+            await applyDepartingFromHomeFallback(travelPlan, req.userId);
+        }
+
         // 2. Execute Parallel API Calls
         console.log('--- Executing API Calls ---');
         const [flights, hotels, weather, news, visa] = await Promise.all([
@@ -584,5 +632,6 @@ module.exports._internal = {
     IATA_CODE_PATTERN,
     toDateOnly,
     formatDate,
-    mapForecastDay
+    mapForecastDay,
+    applyDepartingFromHomeFallback
 };
